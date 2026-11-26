@@ -51,6 +51,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8000/?key=<你的密�
 | 内置 scrcpy-server | **1.19-ws8**（支持 Android 14/15）          |
 | 本地定制 1           | API 密钥认证（`src/server/Auth.ts`，上游没有）     |
 | 本地定制 2           | iframe 比例上报（`src/app/index.ts`，移植自旧版定制） |
+| 本地定制 3           | 群控台画质策略（`src/app/googDevice/client/StreamClientScrcpy.ts` + `MsePlayer`，详见第六节） |
 | 端口               | 8000（HTTP + WebSocket 同端口）              |
 | 进程管理             | systemd：`ws-scrcpy.service`             |
 
@@ -180,7 +181,7 @@ git stash pop                    # 若冲突，重点看 HttpServer.ts / WebSock
 npm run dist && systemctl restart ws-scrcpy
 ```
 
-⚠️ 本地定制共 9 个位置，rebase 时务必确认它们还在：
+⚠️ 本地定制共 11 个位置，rebase 时务必确认它们还在：
 
 | # | 文件 | 内容 |
 |---|---|---|
@@ -193,6 +194,8 @@ npm run dist && systemctl restart ws-scrcpy
 | 7 | `src/app/index.ts` | 「多设备同步操控」段：`touch_report_` 上报 + `touch_inject_` 注入 |
 | 8 | `src/app/index.ts` | 「右键 = 返回键」段：contextmenu 拦截 + `KEYCODE_BACK` 下发 |
 | 9 | `src/app/index.ts` | 顶部 `KeyEvent` / `KeyCodeControlMessage` 静态 import（右键返回用） |
+| 10 | `src/app/googDevice/client/StreamClientScrcpy.ts` | 画质策略：`getMaxSize()` 读 videoSize + 1280 上限；onDisplayInfo 内 take-small 交集禁用（详见第六节） |
+| 11 | `src/app/player/MsePlayer.ts` | `preferredVideoSettings`：12 Mbps / 30fps / 1080×1920 / iFrameInterval 10 |
 
 第 6 条最容易漏——它只有 5 行、藏在文件开头，漏了不会报错，只会让
 `?hideToolbar=1` 之类的参数**静默失效**。升级后可用下面命令自检：
@@ -201,6 +204,7 @@ npm run dist && systemctl restart ws-scrcpy
 node /data/ws-scrcpy-new/tests/test_param_parse.js      # 应输出「全部 PASS」
 node /data/ws-scrcpy-new/tests/test_sync_touch.js       # 同步注入目标必须是 .touch-layer
 node /data/ws-scrcpy-new/tests/test_rightclick_back.js  # 右键返回键
+node /data/ws-scrpy-new/tests/test_quality_policy.js   # 画质策略（含 1280 盒子数学）
 ```
 
 ### 完全重建（换机/重装）
@@ -304,7 +308,7 @@ window.addEventListener('message', (e) => {
 
 相关回归测试：`tests/test_rightclick_back.js`（18 项断言）。
 
-### 群控台画质策略（2026-11-25 新增）
+### 群控台画质策略（2026-11-25 新增，2026-11-26 更新）
 
 **背景**：群控页的投屏 iframe 面板很窄（约 168 CSS px），旧逻辑
 `getMaxSize()` 按「浏览器容器宽 × devicePixelRatio」算编码尺寸 → 面板宽
@@ -312,31 +316,42 @@ window.addEventListener('message', (e) => {
 336×176 放大铺满面板 → 糊。更糟的是这段逻辑跑在 `setScreenInfo()` 之前，
 拿不到手机真实分辨率，所以**永远走这条窄路**，加码率没用（尺寸是瓶颈）。
 
-**改动**（`src/app/googDevice/client/StreamClientScrcpy.ts` + 四个播放器的
+**改动**（`src/app/googDevice/client/StreamClientScrcpy.ts` + MSE 播放器的
 `preferredVideoSettings`）：
 
 | 项 | 旧行为 | 新行为 |
 |---|---|---|
-| `getMaxSize()` | 容器宽 × DPR（约 336） | 手机原生分辨率的「长边正方形」盒子（16 对齐、1920 封顶） |
-| onDisplayInfo「同设备多客户端取最小 bounds」 | 启用（小窗客户端会把所有人拉到 336） | 禁用（`/*take-small-disabled*/`），各客户端独立推送 |
-| 码率上限 | 8 Mbps | 12582912（12 Mbps） |
-| 帧率上限 | 60 | 30 |
-| 播放器 preferred（Mse/WebCodecs/TinyH264/Broadway） | Mse 7 Mbps/60fps/720×720，其余 480×480 | 统一 12 Mbps/30fps/1920×1920 大盒子 |
+| `getMaxSize()` | 容器宽 × DPR（约 336） | 读 `screenInfo.videoSize`，长边超 1280 时**等比缩小到 1280**（只缩不放），16 对齐 |
+| onDisplayInfo「同设备多客户端取最小 bounds」 | 启用（小窗客户端会把所有人拉到 336） | 禁用（源码标记 `take-small-disabled`），各客户端独立推送 |
+| 码率上限 | 8 Mbps | 12582912（12 Mbps，仅 MSE preferred） |
+| 帧率上限 | 60 | 30（仅 MSE preferred） |
+| 播放器 preferred | Mse 7 Mbps/60fps/720×720，其余 480×480 | Mse 12 Mbps/30fps/1080×1920/iFrameInterval 10；其余三个保持上游默认 480×480/512Kbps/24fps |
 
-「长边正方形」盒子的取值顺序：`displayInfo.size`（服务端初始上报的显示
-尺寸，不受当前编码尺寸污染、旋转安全）→ 回落 `screenInfo.videoSize` →
-再回落固定 1920×1920。bounds 对服务端**只缩不放**，所以给大盒子等于
-「不限制」，服务端按原生尺寸编码；取正方形是为了横竖屏旋转都放得下。
+**编码尺寸计算规则**（`getMaxSize()`）：
 
-**端到端验证**（2026-11-25，测试设备物理 1080×1920）：
+```
+K = max(W, H)                       // W/H 取 screenInfo.videoSize
+s = K > 1280 ? 1280 / K : 1         // 长边超 1280 才缩，只缩不放
+编码尺寸 = (round(W*s) & ~15, round(H*s) & ~15)   // 16 对齐
+```
+
+举例：1080×1920 → 720×1280；1920×1072（横屏 1080p）→ 1280×704；
+720×1280 长边恰好 1280 → 不缩，保持 720×1280；1072×592 小屏 → 不缩。
+拿不到 videoSize 时（首帧前）回落固定的 1920×1920 大盒子——scrcpy 服务端
+对 bounds **只缩不放**，大盒子等于「不限制」，服务端按原生尺寸编码。
+
+**端到端验证**（2026-11-26，测试设备物理 1920×1080 横屏，验证脚本直连
+设备推送 1920×1920 盒子，不经 getMaxSize）：
 
 ```
 推送:      bounds=1920x1920  bitrate=12582912  maxFps=30
 服务器回显: {"bitrate":12582912,"maxFps":30,"bounds":[1920,1920]}
-           screenInfo.videoSize=1072,1920
-SPS 实测:  编码分辨率 1072x1920  ← 长边吃满原生（1080 按 8 对齐取 1072）
+           screenInfo.videoSize=1920,1072
+SPS 实测:  编码分辨率 1920x1072  ← 横屏原生吃满
 结果:      PASS
 ```
+
+`getMaxSize()` 的尺寸数学（1280 上限/等比/16 对齐）由单测覆盖，见下。
 
 复现脚本（自包含，会自动杀残留/补 jar/起 server）：
 
@@ -355,7 +370,7 @@ node verify_encode_direct.js <udid>
 （exit 134）。脚本会自动检测并重推 jar。
 
 回归测试：`tests/test_quality_policy.js`（源码断言 + 盒子数学 + 播放器
-设置 + 推送模拟，全 PASS）。
+设置 + 推送模拟，共 33 项，全 PASS）。
 
 ---
 
