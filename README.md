@@ -53,6 +53,9 @@ Server:
 
 * Node.js
 * `adb` executable available in the `PATH` environment variable
+* A C/C++ toolchain to compile `node-pty` (the only native dependency, used
+  for the in-browser remote shell). See [DEPLOY.md](DEPLOY.md) for the exact
+  per-platform commands.
 
 Device:
 
@@ -78,6 +81,9 @@ npm start
 The prebuilt `scrcpy-server.jar` for the device side is bundled under
 `vendor/` and is pushed to each device automatically on first use.
 
+For full installation steps on Linux, macOS, Windows and Docker, see
+[DEPLOY.md](DEPLOY.md).
+
 ## Authentication
 
 Set the API key before starting the server:
@@ -86,17 +92,101 @@ Set the API key before starting the server:
 export WS_SCRCPY_API_KEY="<your-api-key>"
 ```
 
-Every page load and WebSocket connection must then present the key, either
-as a query parameter or in the `Authorization` header:
+Every page load and WebSocket connection must then present the key, via one
+of the following:
+
+| Method | Example |
+| --- | --- |
+| URL parameter | `http://<server>:8000/?key=<KEY>` |
+| Request header | `X-API-Key: <KEY>` |
+| Cookie | `wskey=<KEY>` (set automatically on the first keyed page load) |
+
+Enforcement:
+
+* HTTP layer: invalid requests get `401` (`src/server/services/HttpServer.ts`).
+* WebSocket layer: invalid connections are closed with code `4003`
+  (`src/server/services/WebSocketServer.ts`).
+* Cookie mechanism: in an iframe, the browser only needs the key on the first
+  page load; subsequent control connections inside the page reuse the cookie.
+
+If the `WS_SCRCPY_API_KEY` environment variable is not set, authentication is
+disabled — not recommended for anything reachable from a network.
+
+## Embedding in another platform
+
+The device-list endpoint:
 
 ```
-http://<server>:8000/?key=<your-api-key>
+ws://<server>:8000/?action=goog-device-list&key=<KEY>
+→ {"id":-1,"type":"devicelist","data":{"list":[{udid, state, pid, ...}]}}
 ```
 
-For cross-platform deployment steps (Linux / macOS / Windows / Docker), see
-[DEPLOY.md](DEPLOY.md). For the full deployment guide
-(systemd unit, key rotation, URL formats, embedded-dashboard protocol and
-troubleshooting). The document is written in Chinese.
+Stream URL format for embedding a single device:
+
+```
+http://<server>:8000/?key=<KEY>#!action=stream&udid=<UDID>&player=mse&ws=<urlencoded-ws-address>
+ws address = ws://<server>:8000/?action=proxy-adb&remote=tcp:8886&udid=<UDID>&key=<KEY>
+```
+
+* `?key=` must come before `#!`.
+* The parent page should listen for `iframe_message_resize_<aspect-ratio>`
+  messages to keep panels aligned while devices rotate.
+* Optional parameters: `fitToScreen=1` (fill the container),
+  `captureKeyboard=1` (keyboard capture), `hideToolbar=1` (hide the right
+  toolbar).
+
+Both parameter styles are supported: after `#!` (native) and in `?query`
+(merged into the parsed query; values in `#!` win on conflict).
+
+The right toolbar can also be controlled from the parent page:
+`iframe.contentWindow.postMessage('hide', '*')` and `'show'`.
+
+### Multi-device synchronized control
+
+The stream page exchanges touch events with the parent page via
+`postMessage`, used for "master → slave" synchronization:
+
+| Direction | Message format | Notes |
+| --- | --- | --- |
+| iframe → parent | `touch_report_<type>_<x>_<y>` | `<type>` is `mousedown`/`mousemove`/`mouseup`; x/y are **0-1 normalized coordinates** (relative to the `.video` element). `mousemove` is only reported while the mouse button is held. |
+| parent → iframe | `touch_inject_<type>_<x>_<y>` | Injected on **`.video .touch-layer`** (the player's `touchableCanvas`), picked up by the existing touch listener on `document.body`. |
+
+Normalized coordinates are used because devices have different resolutions
+and container sizes; each slave maps them onto its own container.
+
+The injection target must be **`.touch-layer`, not the `.video` container**:
+`FeaturedInteractionHandler` checks `event.target === player.getTouchableElement()`
+and silently drops the event otherwise. Events need `bubbles: true`, and
+`buttons` must be 0 on `mouseup`.
+
+Prevent loops: the parent must forward only the *master's* reports to the
+other iframes — never forward a slave's reports back out.
+
+```js
+// parent page
+window.addEventListener('message', (e) => {
+    if (typeof e.data !== 'string' || e.data.indexOf('touch_report_') !== 0) { return; }
+    if (e.source !== masterFrame.contentWindow) { return; }   // master only
+    const payload = e.data.replace('touch_report_', 'touch_inject_');
+    slaveFrames.forEach((f) => f.contentWindow.postMessage(payload, '*'));
+});
+```
+
+### Right-click = back
+
+Built into the stream page (no parent-page participation needed, works even
+when accessed directly):
+
+* Right-click inside the `.video` area suppresses the context menu and sends
+  `KEYCODE_BACK` (DOWN + UP) instead.
+* Right-click outside the player keeps the default browser behaviour.
+* The right-click's mouse events are blocked from the touch pipeline to avoid
+  accidental touches with a secondary button.
+* For synchronized control, a right-click inside an iframe reports
+  `touch_report_back` (no coordinates); the parent broadcasts
+  `touch_inject_back` so slaves go back together.
+
+Regression test: `tests/test_rightclick_back.js`.
 
 ## Encoding quality policy
 
@@ -132,6 +222,42 @@ Environment variables:
 Configuration file format: `src/types/Configuration.d.ts`; an example is
 provided in `config.example.yaml`.
 
+## Troubleshooting
+
+**Device won't start, logs show `BindException: Address already in use`**
+
+A leftover process is holding the device-side port. Clear stale scrcpy
+servers on all devices:
+
+```bash
+for d in $(adb devices | grep 'device$' | awk '{print $1}'); do
+  adb -s $d shell 'ps -A -o PID,ARGS | grep "[g]enymobile" | awk "{print \$1}" | xargs -r kill -9'
+done
+```
+
+⚠️ Never run two ws-scrcpy instances on the same machine — they will fight
+over the device-side port.
+
+**Port is already in use**
+
+Check with `ss -tlnp | grep <port>`. Note that adb `forward` may consume a
+range of local ports.
+
+**Wrong aspect ratio / landscape shown as a portrait box**
+
+The front-end bundle must contain `iframe_message_resize_`
+(`grep -c iframe_message_resize_ dist/public/bundle.js` should be 1) and the
+parent page must have the matching listener. Hard-refresh the browser.
+
+**A device-side server serves exactly one WebSocket client**
+
+Once connected, the process stays alive and the port keeps listening, but it
+no longer streams data to new connections — a new handshake succeeds but
+delivers nothing. Kill the stale server before re-testing. Devices also wipe
+`/data/local/tmp`, which drops the jar; the server then aborts with
+`ClassNotFoundException: com.genymobile.scrcpy.Server`. The bundled
+verification scripts detect and re-push the jar automatically.
+
 ## Known issues
 
 * The server on the Android Emulator listens on the internal interface and
@@ -149,6 +275,9 @@ provided in `config.example.yaml`.
   device.
 * This build adds API key authentication (see above); keep the key out of
   version control and rotate it via the environment variable.
+* The server listens on all interfaces by default and relies on the key for
+  protection; for public exposure, restrict source IPs at the firewall or
+  put an HTTPS reverse proxy in front.
 
 ## License
 
