@@ -8,6 +8,7 @@ import { Config } from '../Config';
 import { TypedEmitter } from '../../common/TypedEmitter';
 import * as process from 'process';
 import { EnvName } from '../EnvName';
+import { Auth } from '../Auth';
 
 const DEFAULT_STATIC_DIR = path.join(__dirname, './public');
 
@@ -76,6 +77,21 @@ export class HttpServer extends TypedEmitter<HttpServerEvents> implements Servic
 
     public async start(): Promise<void> {
         this.mainApp = express();
+        // --- API key authentication (enabled when WS_SCRCPY_API_KEY is set) ---
+        if (Auth.isEnabled()) {
+            console.log('[HttpServer] API key authentication ENABLED');
+            this.mainApp.use((req, res, next) => {
+                if (Auth.checkRequest(req)) {
+                    const cookie = Auth.cookieFor(req);
+                    if (cookie) {
+                        res.setHeader('Set-Cookie', cookie);
+                    }
+                    return next();
+                }
+                return res.status(401).send('Unauthorized: missing or invalid key (use ?key=... or X-API-Key header)');
+            });
+        }
+        // --- end API key authentication ---
         if (HttpServer.SERVE_STATIC && HttpServer.PUBLIC_DIR) {
             this.mainApp.use(PATHNAME, express.static(HttpServer.PUBLIC_DIR));
 

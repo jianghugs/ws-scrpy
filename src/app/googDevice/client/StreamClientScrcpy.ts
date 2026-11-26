@@ -41,6 +41,23 @@ type StartParams = {
 
 const TAG = '[StreamClientScrcpy]';
 
+/* ============ 群控台画质策略（phase-1 版，2026-11-26 与线上 bundle 对齐）============
+ * 背景：8100 投屏墙的 iframe 面板只有一两百像素宽，原来按浏览器容器尺寸
+ * （容器宽 × devicePixelRatio）协商编码分辨率，1080p 手机会被压成三百多像素宽，
+ * 再用 object-fit: contain 放大铺满面板 → 全程发虚，加码率也没用（尺寸是瓶颈）。
+ * 本版行为（与线上部署的 bundle 逐行为一致）：
+ *  - getMaxSize() 读手机当前编码尺寸 screenInfo.videoSize 并 16 对齐，
+ *    拿不到时返回固定的 1920×1920 大盒子；不再看浏览器容器/窗口大小；
+ *  - onDisplayInfo 内「同设备多客户端取 bounds 交集」已禁用（take-small-disabled）：
+ *    否则别人开个小窗，本客户端也会被服务端设置拉到低分辨率；
+ *  - MSE 播放器首选参数：12 Mbps / 30 fps / 1080×1920（见 MsePlayer）。
+ * 已知行为（本版取舍，见 2026-11-26 工作日志）：
+ *  - videoSize 是服务端当前编码尺寸而非物理分辨率，横屏设备按竖盒子协商，
+ *    编码高可能被压（竖屏 1080p 设备满幅）；
+ *  - 另外三个备选播放器（TinyH264/WebCodecs/Broadway）保持上游默认值；
+ *  - 无画质策略强制覆盖（设置更新时码率/帧率可能被服务端旧设置带偏）。
+ */
+
 export class StreamClientScrcpy
     extends BaseClient<ParamsStreamScrcpy, never>
     implements KeyEventListener, InteractionHandlerListener
@@ -245,10 +262,13 @@ export class StreamClientScrcpy
             if (onlyOneClient || smallerThenCurrent) {
                 min = currentSettings;
             }
-            const minBounds = currentSettings.bounds?.intersect(min.bounds);
-            if (minBounds && !minBounds.equals(min.bounds)) {
-                min = StreamClientScrcpy.createVideoSettingsWithBounds(min, minBounds);
-            }
+            // take-small-disabled：原「同设备多客户端取 bounds 交集」逻辑已禁用。
+            // 群控场景下任一台小窗/低分辨率客户端都会通过服务端设置把其他客户端
+            // 一起拉到低分辨率，互相拖累。被移除的原代码：
+            //   const minBounds = currentSettings.bounds?.intersect(min.bounds);
+            //   if (minBounds && !minBounds.equals(min.bounds)) {
+            //       min = StreamClientScrcpy.createVideoSettingsWithBounds(min, minBounds);
+            //   }
         }
         if (!min.equals(videoSettings) || !this.joinedStream) {
             this.joinedStream = true;
@@ -429,13 +449,19 @@ export class StreamClientScrcpy
     }
 
     public getMaxSize(): Size | undefined {
-        if (!this.controlButtons) {
-            return;
+        // 群控台画质策略：编码尺寸跟随手机当前编码尺寸（screenInfo.videoSize），
+        // 16 对齐；拿不到时给固定的 1920×1920 大盒子。
+        // 不再按浏览器容器/窗口计算——iframe 面板只有一两百像素宽，
+        // 按容器算会把手机压成三百多像素宽。
+        if (this.controlButtons) {
+            const info = this.player?.getScreenInfo?.();
+            const videoSize = info?.videoSize;
+            if (videoSize && videoSize.width > 0 && videoSize.height > 0) {
+                return new Size(videoSize.width & ~15, videoSize.height & ~15);
+            }
+            return new Size(1920, 1920);
         }
-        const body = document.body;
-        const width = (body.clientWidth - this.controlButtons.clientWidth) & ~15;
-        const height = body.clientHeight & ~15;
-        return new Size(width, height);
+        return undefined;
     }
 
     private setTouchListeners(player: BasePlayer): void {

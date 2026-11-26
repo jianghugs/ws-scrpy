@@ -21,10 +21,10 @@ export class MsePlayer extends BasePlayer {
     public static readonly playerCodeName = 'mse';
     public static readonly preferredVideoSettings: VideoSettings = new VideoSettings({
         lockedVideoOrientation: -1,
-        bitrate: 7340032,
-        maxFps: 60,
+        bitrate: 12582912, // 12 Mbps（群控台画质策略，见 StreamClientScrcpy）
+        maxFps: 30,
         iFrameInterval: 10,
-        bounds: new Size(720, 720),
+        bounds: new Size(1080, 1920), // 群控台画质策略：1080×1920 盒子（1080p 原生宽），服务端只缩不放
         sendFrameMeta: false,
     });
     private static DEFAULT_FRAMES_PER_FRAGMENT = 1;
