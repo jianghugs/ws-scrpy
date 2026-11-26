@@ -1,9 +1,6 @@
-# ws-scrcpy 部署文档（新版 · 端口 8000）
+# ws-scrcpy 部署文档
 
-> 服务器：192.168.1.210（Proxmox VE 宿主机 pve）  
-> 最后更新：2026-10-22  
-> 本目录：`/data/ws-scrcpy-new/`（新版，当前线上运行）  
-> 旧版目录：`/data/ws-scrcpy/`（已停用，仅作回滚备份）
+> 最后更新：2026-11-26
 
 ---
 
@@ -35,7 +32,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8000/?key=<你的密�
 换机部署后记得：
 
 - 改 `config.yaml` 里的 `port`（如与现有端口冲突）
-- 把密钥同步给 8100 的 `auth.json`（`ws_key` 字段）和所有嵌入方
+- 把密钥同步给所有嵌入方/调用方
 - 设备端 jar 会自动推送，无需手动
 
 ---
@@ -122,7 +119,7 @@ server:
 
 | 方式     | 示例                                     |
 | ------ | -------------------------------------- |
-| URL 参数 | `http://192.168.1.210:8000/?key=<KEY>` |
+| URL 参数 | `http://<服务器地址>:8000/?key=<KEY>` |
 | 请求头    | `X-API-Key: <KEY>`                     |
 | Cookie | `wskey=<KEY>`（首次带 key 访问自动种上）          |
 
@@ -131,17 +128,13 @@ server:
 - Cookie 机制：iframe 场景下浏览器只需在首次加载时带一次 key，  
   之后页面内的触控/指令连接自动携带 cookie
 
-**修改密钥**（两处必须同步改）：
+**修改密钥**：
 
 ```bash
 # 1. 改 systemd unit 里的 WS_SCRCPY_API_KEY
 vim /etc/systemd/system/ws-scrcpy.service
-# 2. 改 Flask 的 auth.json（8100 生成的链接会用它拼 key）
-vim /root/ws-scrcpy-flask-web/auth.json
-# 3. 重启两个服务
+# 2. 重启服务
 systemctl daemon-reload && systemctl restart ws-scrcpy
-kill $(ss -tlnpH 'sport = :8100' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
-bash /root/ws-scrcpy-flask-web/start.sh
 ```
 
 ---
@@ -187,7 +180,7 @@ git stash pop                    # 若冲突，重点看 HttpServer.ts / WebSock
 npm run dist && systemctl restart ws-scrcpy
 ```
 
-⚠️ 本地定制共 4 类（6 个位置），rebase 时务必确认它们还在：
+⚠️ 本地定制共 9 个位置，rebase 时务必确认它们还在：
 
 | # | 文件 | 内容 |
 |---|---|---|
@@ -215,7 +208,7 @@ node /data/ws-scrcpy-new/tests/test_rightclick_back.js  # 右键返回键
 ```bash
 git clone https://github.com/NetrisTV/ws-scrcpy.git /data/ws-scrcpy-new
 cd /data/ws-scrcpy-new
-# 应用上述 3 处本地定制（可从本文档第二节所述文件位置对照恢复）
+# 应用上述本地定制（可从本文档第二节所述文件位置对照恢复）
 npm ci --no-audit --no-fund
 npm run dist
 # 写 /etc/systemd/system/ws-scrcpy.service（见第二节）后：
@@ -224,27 +217,20 @@ systemctl daemon-reload && systemctl enable --now ws-scrcpy
 
 ---
 
-## 六、与其他服务的关系
+## 六、对外接口
 
-| 端口        | 服务                                  | 关系                              |
-| --------- | ----------------------------------- | ------------------------------- |
-| 8100      | Flask（`/root/ws-scrcpy-flask-web/`） | 设备选择页，iframe 嵌本服务，生成的链接自动带 key  |
-| 1236      | Python（`/root/smartHome4.0/`）       | 旧设备列表 API；本服务自带等价接口             |
-| 8001-8048 | adb forward                         | **每台设备占一个端口（→设备8886）**，选新端口务必避开 |
-| 5037      | adb server                          | 宿主机全局 adb，设备发现依赖它               |
-
-本服务自带的设备列表接口（可替代 1236）：
+本服务自带的设备列表接口：
 
 ```
-ws://192.168.1.210:8000/?action=goog-device-list&key=<KEY>
+ws://<服务器地址>:8000/?action=goog-device-list&key=<KEY>
 → {"id":-1,"type":"devicelist","data":{"list":[{udid, state, pid, ...}]}}
 ```
 
 ### 嵌入其他平台的 URL 格式
 
 ```
-http://192.168.1.210:8000/?key=<KEY>#!action=stream&udid=<UDID>&player=mse&ws=<URL编码的ws地址>
-ws地址 = ws://192.168.1.210:8000/?action=proxy-adb&remote=tcp:8886&udid=<UDID>&key=<KEY>
+http://<服务器地址>:8000/?key=<KEY>#!action=stream&udid=<UDID>&player=mse&ws=<URL编码的ws地址>
+ws地址 = ws://<服务器地址>:8000/?action=proxy-adb&remote=tcp:8886&udid=<UDID>&key=<KEY>
 ```
 
 - `?key=` 必须在 `#!` 之前
@@ -269,7 +255,7 @@ http://host:8000/?key=<KEY>&hideToolbar=1#!action=stream&udid=<UDID>&player=mse&
 否则 `?query` 写法又会静默失效（页面不报错，只是参数被忽略）。
 
 - 右侧工具栏还支持父页面动态控制：`iframe.contentWindow.postMessage('hide','*')`
-  隐藏、`'show'` 显示（8100 顶栏的「隐藏工具栏」按钮即用此机制）
+  隐藏、`'show'` 显示（父页面顶栏的「隐藏工具栏」按钮即用此机制）
 
 ### 多设备同步操控协议（2026-11-20 新增）
 
@@ -290,7 +276,7 @@ http://host:8000/?key=<KEY>&hideToolbar=1#!action=stream&udid=<UDID>&player=mse&
 
 ⚠️ **防传染**：父页面必须只把「主控」的上报转发给其他 iframe，不要把从机的
 上报再转发出去，否则会形成回环。（从机收到注入事件后其页内的上报监听也会触发，
-靠「只认主控 iframe」这条规则阻断。）8100 的实现见 `tests/test_sync_8100.js`。
+靠「只认主控 iframe」这条规则阻断。）
 
 示例（把一台设备的点击同步到另外三台）：
 
@@ -320,7 +306,7 @@ window.addEventListener('message', (e) => {
 
 ### 群控台画质策略（2026-11-25 新增）
 
-**背景**：8100 群控页的投屏 iframe 面板很窄（约 168 CSS px），旧逻辑
+**背景**：群控页的投屏 iframe 面板很窄（约 168 CSS px），旧逻辑
 `getMaxSize()` 按「浏览器容器宽 × devicePixelRatio」算编码尺寸 → 面板宽
 ×2 ≈ 336 → 手机就按 336 宽编码，播放器再用 `object-fit: contain` 把
 336×176 放大铺满面板 → 糊。更糟的是这段逻辑跑在 `setScreenInfo()` 之前，
@@ -386,7 +372,7 @@ done
 systemctl restart ws-scrcpy
 ```
 
-⚠️ **严禁在宿主机同时跑两个 ws-scrcpy 实例**——会互相抢占设备端 8886  
+⚠️ **严禁在同一台机器同时跑两个 ws-scrcpy 实例**——会互相抢占设备端 8886  
 （2026-10-22 升级时踩过坑，旧实例直接崩）。
 
 **2. 端口 8000 起不来**  
@@ -406,24 +392,7 @@ ws 版本变化（如 ws5→ws8）会自动重推 scrcpy-server.jar 到每台手
 
 ---
 
-## 八、回滚到旧版
+## 八、安全提醒
 
-旧版完整保留在 `/data/ws-scrcpy/`（含 dist 与定制，内置 ws5 jar）：
-
-```bash
-systemctl disable --now ws-scrcpy                 # 停新版
-# 清设备残留（上面第七节第 1 条脚本，必须做，否则旧版起不来）
-cd /data/ws-scrcpy/dist && nohup node index.js &  # 旧版方式启动
-```
-
-注意旧版无认证、jar 为 ws5、启动后手机端会自动换回 ws5 jar。  
-旧版回滚仅作应急，长期建议仍用新版。
-
----
-
-## 九、安全提醒（遗留事项）
-
-- 本服务 8000 对**全网段**监听，仅靠 key 保护；如需进一步收紧，  
+- 本服务默认对**全网段**监听，仅靠 key 保护；如需进一步收紧，  
   可在防火墙限制来源 IP，或加 nginx 反代 + HTTPS
-- 宿主机 SSH 仍为 root 密码登录，建议改密钥登录
-- 1236 设备 API 仍无认证（如不再使用可停掉，用本服务的 goog-device-list 替代）

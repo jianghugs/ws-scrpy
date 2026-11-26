@@ -42,7 +42,7 @@ type StartParams = {
 const TAG = '[StreamClientScrcpy]';
 
 /* ============ 群控台画质策略（phase-1 版，2026-11-26 与线上 bundle 对齐）============
- * 背景：8100 投屏墙的 iframe 面板只有一两百像素宽，原来按浏览器容器尺寸
+ * 背景：投屏墙的 iframe 面板只有一两百像素宽，原来按浏览器容器尺寸
  * （容器宽 × devicePixelRatio）协商编码分辨率，1080p 手机会被压成三百多像素宽，
  * 再用 object-fit: contain 放大铺满面板 → 全程发虚，加码率也没用（尺寸是瓶颈）。
  * 本版行为（与线上部署的 bundle 逐行为一致）：

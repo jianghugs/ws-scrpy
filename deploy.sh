@@ -82,4 +82,4 @@ echo "验证:   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:$PORT/
 echo "        curl -s -o /dev/null -w '%{http_code}\n' \"http://127.0.0.1:$PORT/?key=$KEY\"  # 期望 200"
 echo "日志:   journalctl -u ws-scrcpy -f"
 echo "=========================================="
-echo "提醒: 请把密钥同步到 8100 的 auth.json (ws_key 字段) 和所有嵌入方。"
+echo "提醒: 请把密钥同步给所有嵌入方。"
