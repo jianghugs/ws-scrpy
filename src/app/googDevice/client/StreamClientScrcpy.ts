@@ -450,14 +450,20 @@ export class StreamClientScrcpy
 
     public getMaxSize(): Size | undefined {
         // 群控台画质策略：编码尺寸跟随手机当前编码尺寸（screenInfo.videoSize），
-        // 16 对齐；拿不到时给固定的 1920×1920 大盒子。
+        // 长边超过 1280 时等比缩小到 1280（只缩不放），否则保持原始尺寸；
+        // 拿不到时给固定的 1920×1920 大盒子。
         // 不再按浏览器容器/窗口计算——iframe 面板只有一两百像素宽，
         // 按容器算会把手机压成三百多像素宽。
         if (this.controlButtons) {
             const info = this.player?.getScreenInfo?.();
             const videoSize = info?.videoSize;
             if (videoSize && videoSize.width > 0 && videoSize.height > 0) {
-                return new Size(videoSize.width & ~15, videoSize.height & ~15);
+                const longSide = Math.max(videoSize.width, videoSize.height);
+                const scale = longSide > 1280 ? 1280 / longSide : 1;
+                return new Size(
+                    Math.round(videoSize.width * scale) & ~15,
+                    Math.round(videoSize.height * scale) & ~15,
+                );
             }
             return new Size(1920, 1920);
         }
