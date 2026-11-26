@@ -1,289 +1,152 @@
-# ws scrcpy
+# ws-scrpy
 
-Web client for [Genymobile/scrcpy][scrcpy] and more.
+Web-based Android device mirroring and control. Open a browser, see the live
+screen of any device connected over `adb`, and control it with mouse and
+keyboard. The server handles device discovery and the control channel; the
+video stream is decoded directly in the browser, so a single machine can host
+dozens of simultaneous streams.
 
-## Requirements
+Built for device-farm scenarios: dozens of devices are mirrored side by side
+in a dashboard, each panel streaming independently at full quality.
 
-Browser must support the following technologies:
-* WebSockets
-* Media Source Extensions and h264 decoding;
-* WebWorkers
-* WebAssembly
-
-Server:
-* Node.js v10+
-* node-gyp ([installation](https://github.com/nodejs/node-gyp#installation))
-* `adb` executable must be available in the PATH environment variable
-
-Device:
-* Android 5.0+ (API 21+)
-* Enabled [adb debugging](https://developer.android.com/studio/command-line/adb.html#Enabling)
-* On some devices, you also need to enable
-[an additional option](https://github.com/Genymobile/scrcpy/issues/70#issuecomment-373286323)
-to control it using keyboard and mouse.
-
-## Build and Start
-
-Make sure you have installed [node.js](https://nodejs.org/en/download/),
-[node-gyp](https://github.com/nodejs/node-gyp) and
-[build tools](https://github.com/nodejs/node-gyp#installation)
-```shell
-git clone https://github.com/NetrisTV/ws-scrcpy.git
-cd ws-scrcpy
-
-## For stable version find latest tag and switch to it:
-# git tag -l
-# git checkout vX.Y.Z
-
-npm install
-npm start
-```
-
-## Supported features
+## Features
 
 ### Android
 
-#### Screen casting
-The modified [version][fork] of [Genymobile/scrcpy][scrcpy] used to stream
-H264-video, which then decoded by one of included decoders:
+* **Screen casting** — H.264 video streamed over WebSocket, decoded in the
+  browser by one of the bundled players:
+  * *Mse Player* — builds mp4 containers from the NALU stream and feeds them
+    to an HTML5 `<video>` element via Media Source Extensions; can use
+    hardware acceleration.
+  * *Broadway Player* — software decoder compiled to WebAssembly.
+  * *TinyH264 Player* — lightweight software decoder (WebAssembly).
+  * *WebCodecs Player* — uses the browser's built-in media decoder.
+* **Remote control** — touch events (including multi-touch), mouse wheel
+  scrolling, keyboard capture, text injection, clipboard sync, and device
+  rotation.
+* **Right-click = back** — a right click inside the player sends
+  `KEYCODE_BACK` to the device, so embedded dashboards get a natural
+  "go back" gesture without an on-screen button.
+* **Multi-device synchronized control** — an embedded panel reports back
+  gestures to its parent page, which broadcasts them to all other panels so
+  a fleet of devices performs the same action together.
+* **File push** — drag & drop an APK onto the page to push it to the device.
+* **Remote shell** — `adb shell` in your browser (xterm.js terminal).
+* **DevTools** — inspect web pages and WebViews running on the device.
+* **File management** — list, upload and download files.
 
-##### Mse Player
+### This build's additions
 
-Based on [xevokk/h264-converter][xevokk/h264-converter].
-HTML5 Video.<br>
-Requires [Media Source API][MSE] and `video/mp4; codecs="avc1.42E01E"`
-[support][isTypeSupported]. Creates mp4 containers from NALU, received from a
-device, then feeds them to [MediaSource][MediaSource]. In theory, it can use
-hardware acceleration.
+| Feature | Where | Notes |
+| --- | --- | --- |
+| API key authentication | `src/server/Auth.ts` | All HTTP and WebSocket requests require a valid key; the key never appears in any tracked file — set it via the `WS_SCRCPY_API_KEY` environment variable. |
+| Native-resolution encoding policy | `src/app/googDevice/client/StreamClientScrcpy.ts` | Encoding size follows the device's current video size, capped at a 1280 px long side (downscale only). A small viewer panel can no longer degrade the stream. |
+| Multi-client size protection | same file | The "intersect bounds across clients" behaviour is disabled — one small window can no longer force every other client of the same device down to a low resolution. |
+| URL query passthrough | `src/app/index.ts` | `?query` parameters are merged into the parsed query string, which makes it easy for external dashboards to compose links (e.g. `?hideToolbar=1`). |
+| iframe size reporting | `src/app/index.ts` | The embedded panel reports its on-screen aspect ratio to the parent page, so dashboards can keep panels aligned while devices rotate. |
 
-##### Broadway Player
+## Requirements
 
-Based on [mbebenita/Broadway][broadway] and
-[131/h264-live-player][h264-live-player].<br>
-Software video-decoder compiled into wasm-module.
-Requires [WebAssembly][wasm] and preferably [WebGL][webgl] support.
+Server:
 
-##### TinyH264 Player
+* Node.js
+* `adb` executable available in the `PATH` environment variable
 
-Based on [udevbe/tinyh264][tinyh264].<br>
-Software video-decoder compiled into wasm-module. A slightly updated version of
-[mbebenita/Broadway][broadway].
-Requires [WebAssembly][wasm], [WebWorkers][workers], [WebGL][webgl] support.
+Device:
 
-##### WebCodecs Player
+* Android 5.0+ (API 21+)
+* USB debugging enabled
+* On some devices an additional option must be enabled to allow control via
+  keyboard and mouse
 
-Decoding is done by browser built-in (software/hardware) media decoder.
-Requires [WebCodecs][webcodecs] support. At the moment, available only in
-[Chromium](https://www.chromestatus.com/feature/5669293909868544) and derivatives.
+Browser:
 
-#### Remote control
-* Touch events (including multi-touch)
-* Multi-touch emulation: <kbd>CTRL</kbd> to start with center at the center of
-the screen, <kbd>SHIFT</kbd> + <kbd>CTRL</kbd> to start with center at the
-current point
-* Mouse wheel and touchpad vertical/horizontal scrolling
-* Capturing keyboard events
-* Injecting text (ASCII only)
-* Copy to/from device clipboard
-* Device "rotation"
+* WebSockets
+* Media Source Extensions with h264 decoding (for the Mse player)
+* WebWorkers and WebAssembly (for the wasm players)
 
-#### File push
-Drag & drop an APK file to push it to the `/data/local/tmp` directory. You can
-install it manually from the included [xtermjs/xterm.js][xterm.js] terminal
-emulator (see below).
+## Build and Start
 
-#### Remote shell
-Control your device from `adb shell` in your browser.
+```shell
+npm install
+npm run dist    # production build into dist/
+npm start
+```
 
-#### Debug WebPages/WebView
-[/docs/Devtools.md](/docs/Devtools.md)
+The prebuilt `scrcpy-server.jar` for the device side is bundled under
+`vendor/` and is pushed to each device automatically on first use.
 
-#### File listing
-* List files
-* Upload files by drag & drop
-* Download files
+## Authentication
 
-### iOS
+Set the API key before starting the server:
 
-***Experimental Feature***: *is not built by default*
-(see [custom build](#custom-build))
+```shell
+export WS_SCRCPY_API_KEY="<your-api-key>"
+```
 
-#### Screen Casting
+Every page load and WebSocket connection must then present the key, either
+as a query parameter or in the `Authorization` header:
 
-Requires [ws-qvh][ws-qvh] available in `PATH`.
+```
+http://<server>:8000/?key=<your-api-key>
+```
 
-Tips for a stable QuickTime-over-USB stream: set the device's **Auto-Lock to
-Never** (a locked screen stops the stream), connect the iPhone **directly**
-(no USB hub), and do not run a standalone `ws-qvh`/`qvh` capture against the
-same device while ws-scrcpy is streaming — only one process may hold a device.
+See [README-部署文档.md](README-部署文档.md) for the full deployment guide
+(systemd unit, key rotation, URL formats, embedded-dashboard protocol and
+troubleshooting). The document is written in Chinese.
 
-#### MJPEG Server
+## Encoding quality policy
 
-> ⚠️ **Temporarily suspended.** After the migration to a standalone Appium
-> (see [Remote control](#remote-control)) the WDA-MJPEG video path is not wired
-> up and is planned to be restored in a follow-up. iOS screen casting currently
-> runs via `ws-qvh` (see above).
+Encoding size is derived from the device's current video size
+(`screenInfo.videoSize`), never from the browser container size — an
+embedded panel is only a couple of hundred pixels wide, and sizing the
+encoder by the container would produce an unreadable picture.
 
-Enable `USE_WDA_MJPEG_SERVER` in the build configuration file
-(see [custom build](#custom-build)).
+```
+K = max(W, H)                                  // device video size
+s = K > 1280 ? 1280 / K : 1                    // downscale only
+encoding size = (round(W*s) & ~15, round(H*s) & ~15)
+```
 
-Alternative way to stream screen content. It does not
-require additional software as `ws-qvh`, but may require more resources as each
-frame encoded as jpeg image.
+Examples: 1080×1920 → 720×1280; 1920×1072 (landscape) → 1280×704; a
+720×1280 device is left untouched. Until the first frame arrives, a large
+1920×1920 fallback box is used; the device encoder never upscales, so a
+larger box simply means "no limit".
 
-#### Remote control
+The Mse player additionally requests 12 Mbps / 30 fps. The regression test
+for this policy is `tests/test_quality_policy.js`.
 
-Device control is provided by [appium/WebDriverAgent][WebDriverAgent], driven
-through a modern [Appium][appium] server over the W3C WebDriver protocol.
-ws-scrcpy bundles Appium (it is a dependency, and a `postinstall` step pins the
-XCUITest driver into a project-local `.appium-home`), spawns it as a child
-process on startup, and forwards control commands to it over HTTP — no global
-Appium installation is required.
+## Configuration
 
-Supported actions:
-* Simple touch
-* Scroll / swipe
-* Home button click
-
-##### One-time device setup (real iOS device)
-
-WebDriverAgent has to be built, signed and trusted on the device once:
-
-1. Open the WDA project in Xcode — `WebDriverAgent.xcodeproj` under
-   `.appium-home/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/`
-   (or under `$APPIUM_HOME/…` if you point Appium elsewhere). Select the
-   `WebDriverAgentRunner` scheme, set your **Team** and a unique **Bundle
-   Identifier**, and run it on the device once (`⌘U`).
-2. On the device: **trust** the developer certificate
-   (`Settings → General → VPN & Device Management`) and enable **Developer
-   Mode** (`Settings → Privacy & Security → Developer Mode`, iOS 16+).
-3. (Optional) enable `AssistiveTouch`: `Settings → General → Accessibility`.
-
-See Appium's [real-device configuration guide][wda-real-device] for the full
-WebDriverAgent setup. After this one-time step ws-scrcpy builds and launches WDA
-on its own.
-
-> **Be patient on the first control action.** Appium builds and launches
-> WebDriverAgent on demand, which can take a couple of minutes the first time —
-> the screen may look unresponsive until WDA is up. A free Apple developer
-> account's provisioning expires every 7 days (re-sign weekly); a paid account
-> avoids this.
-
-##### iOS control configuration (environment variables)
+Environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `WDA_TEAM_ID` | Apple Team ID used to sign WebDriverAgent (the certificate's `OU`) |
-| `WDA_SIGNING_ID` | Signing identity (default `Apple Development`) |
-| `WDA_BUNDLE_ID` | Unique WDA bundle id, e.g. `com.<you>.WebDriverAgentRunner` |
-| `WDA_PLATFORM_VERSION` | iOS version of the device (silences a driver warning) |
-| `WDA_USE_PREBUILT` | `true` to reuse an already built/installed WDA (skip the rebuild) |
-| `WS_SCRCPY_DEBUG` | Verbose logs — surfaces the Appium (incl. xcodebuild) and `ws-qvh` output in the server console |
-| `APPIUM_BIN` / `APPIUM_HOME` / `APPIUM_PORT` / `APPIUM_LOG_LEVEL` | Override the bundled Appium binary, driver home, port or log level |
+| `WS_SCRCPY_API_KEY` | API key required by all clients (see above) |
+| `WS_SCRCPY_CONFIG` | Path to the configuration file (YAML) |
+| `WS_SCRCPY_PATHNAME` | Base pathname if the app is not served from `/` |
 
-> **`xcodebuild failed with code 65`** almost always means WebDriverAgent could
-> not be **signed or launched** on the device (untrusted certificate, Developer
-> Mode off, wrong Team ID, or expired provisioning) — it is not a build error in
-> ws-scrcpy. Run with `WS_SCRCPY_DEBUG=1` to surface the underlying xcodebuild
-> error and follow the [real-device configuration guide][wda-real-device].
-
-## Custom Build
-
-You can customize project before build by overriding the
-[default configuration](/webpack/default.build.config.json) in
-[build.config.override.json](/build.config.override.json):
-* `INCLUDE_APPL` - include code for iOS device tracking and control
-* `INCLUDE_GOOG` - include code for Android device tracking and control
-* `INCLUDE_ADB_SHELL` - [remote shell](#remote-shell) for android devices
-([xtermjs/xterm.js][xterm.js], [Tyriar/node-pty][node-pty])
-* `INCLUDE_DEV_TOOLS` - [dev tools](#debug-webpageswebview) for web pages and
-web views on android devices
-* `INCLUDE_FILE_LISTING` - minimalistic [file management](#file-listing)
-* `USE_BROADWAY` - include [Broadway Player](#broadway-player)
-* `USE_H264_CONVERTER` - include [Mse Player](#mse-player)
-* `USE_TINY_H264` - include [TinyH264 Player](#tinyh264-player)
-* `USE_WEBCODECS` - include [WebCodecs Player](#webcodecs-player)
-* `USE_WDA_MJPEG_SERVER` - configure WebDriverAgent to start MJPEG server
-_(temporarily suspended, see [MJPEG Server](#mjpeg-server))_
-* `USE_QVH_SERVER` - include support for [ws-qvh][ws-qvh]
-* `SCRCPY_LISTENS_ON_ALL_INTERFACES` - WebSocket server in `scrcpy-server.jar`
-will listen for connections on all available interfaces. When `true`, it allows
-connecting to device directly from a browser. Otherwise, the connection must be
-established over adb.
-
-## Run configuration
-
-You can specify a path to a configuration file in `WS_SCRCPY_CONFIG`
-environment variable.
-
-If you want to have another pathname than "/" you can specify it in the
-`WS_SCRCPY_PATHNAME` environment variable.
-
-Configuration file format: [Configuration.d.ts](/src/types/Configuration.d.ts).
-
-Configuration file example: [config.example.yaml](/config.example.yaml).
+Configuration file format: `src/types/Configuration.d.ts`; an example is
+provided in `config.example.yaml`.
 
 ## Known issues
 
-* The server on the Android Emulator listens on the internal interface and not
-available from the outside. Select `proxy over adb` from the interfaces list.
-* TinyH264Player may fail to start, try to reload the page.
-* MsePlayer reports too many dropped frames in quality statistics: needs
-further investigation.
-* On Safari file upload does not show progress (it works in one piece).
-* iOS screen casting can be slow to start — if the picture does not appear,
-reload the tab a few times (or replug the device) until the QuickTime stream
-catches; once it does, it stays stable. An empty player does not necessarily
-mean it is broken.
-* iOS control: `xcodebuild failed with code 65` is a WebDriverAgent signing /
-launch issue, not a build error — see [Remote control](#remote-control).
+* The server on the Android Emulator listens on the internal interface and
+  is not available from the outside — select `proxy over adb` from the
+  interfaces list.
+* TinyH264Player may fail to start; reload the page if it happens.
+* MsePlayer may report a high dropped-frame count in the quality
+  statistics.
 
-## Security warning
-Be advised and keep in mind:
-* There is no encryption between browser and node.js server (you can [configure](#run-configuration) HTTPS).
-* There is no encryption between browser and WebSocket server on android device.
-* There is no authorization on any level.
-* The modified version of scrcpy with integrated WebSocket server is listening
-for connections on all network interfaces (see [custom build](#custom-build)).
-* The modified version of scrcpy will keep running after the last client
-disconnected.
+## Security
 
-## Related projects
-* [Genymobile/scrcpy][scrcpy]
-* [xevokk/h264-converter][xevokk/h264-converter]
-* [131/h264-live-player][h264-live-player]
-* [mbebenita/Broadway][broadway]
-* [DeviceFarmer/adbkit][adbkit]
-* [xtermjs/xterm.js][xterm.js]
-* [udevbe/tinyh264][tinyh264]
-* [danielpaulus/quicktime_video_hack][qvh]
+* There is no encryption between the browser and the node.js server unless
+  you configure HTTPS yourself.
+* There is no encryption between the server and the WebSocket server on the
+  device.
+* This build adds API key authentication (see above); keep the key out of
+  version control and rotate it via the environment variable.
 
-## scrcpy websocket fork
+## License
 
-Currently, support of WebSocket protocol added to v1.19 of scrcpy
-* [Prebuilt package](/vendor/Genymobile/scrcpy/scrcpy-server.jar)
-* [Source code][fork]
-
-[fork]: https://github.com/NetrisTV/scrcpy/tree/feature/websocket-v1.19.x
-
-[scrcpy]: https://github.com/Genymobile/scrcpy
-[xevokk/h264-converter]: https://github.com/xevokk/h264-converter
-[h264-live-player]: https://github.com/131/h264-live-player
-[broadway]: https://github.com/mbebenita/Broadway
-[adbkit]: https://github.com/DeviceFarmer/adbkit
-[xterm.js]: https://github.com/xtermjs/xterm.js
-[tinyh264]: https://github.com/udevbe/tinyh264
-[node-pty]: https://github.com/Tyriar/node-pty
-[WebDriverAgent]: https://github.com/appium/WebDriverAgent
-[appium]: https://appium.io
-[wda-real-device]: https://appium.github.io/appium-xcuitest-driver/latest/preparation/real-device-config/
-[qvh]: https://github.com/danielpaulus/quicktime_video_hack
-[ws-qvh]: https://github.com/NetrisTV/ws-qvh
-
-[MSE]: https://developer.mozilla.org/en-US/docs/Web/API/Media_Source_Extensions_API
-[isTypeSupported]: https://developer.mozilla.org/en-US/docs/Web/API/MediaSource/isTypeSupported
-[MediaSource]: https://developer.mozilla.org/en-US/docs/Web/API/MediaSource
-[wasm]: https://developer.mozilla.org/en-US/docs/WebAssembly
-[webgl]: https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API
-[workers]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API
-[webcodecs]: https://w3c.github.io/webcodecs/
+[MIT](LICENSE).
