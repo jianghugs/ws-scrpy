@@ -41,13 +41,15 @@ type StartParams = {
 
 const TAG = '[StreamClientScrcpy]';
 
-/* ============ 群控台画质策略（phase-1 版，2026-11-26 与线上 bundle 对齐）============
+/* ============ 群控台画质策略（与线上 bundle 逐行为一致）============
  * 背景：投屏墙的 iframe 面板只有一两百像素宽，原来按浏览器容器尺寸
  * （容器宽 × devicePixelRatio）协商编码分辨率，1080p 手机会被压成三百多像素宽，
  * 再用 object-fit: contain 放大铺满面板 → 全程发虚，加码率也没用（尺寸是瓶颈）。
- * 本版行为（与线上部署的 bundle 逐行为一致）：
- *  - getMaxSize() 读手机当前编码尺寸 screenInfo.videoSize 并 16 对齐，
- *    拿不到时返回固定的 1920×1920 大盒子；不再看浏览器容器/窗口大小；
+ * 本版行为：
+ *  - getMaxSize() 读手机当前编码尺寸 screenInfo.videoSize，长边超过 1280 时
+ *    等比缩小到 1280（只缩不放），并对宽高做 16 对齐；拿不到 videoSize 时
+ *    返回固定的 1920×1920 大盒子兜底；不再看浏览器容器/窗口大小；
+ *    例：1080×1920 竖屏 → 720×1280；1920×1072 横屏 → 1280×704。
  *  - onDisplayInfo 内「同设备多客户端取 bounds 交集」已禁用（take-small-disabled）：
  *    否则别人开个小窗，本客户端也会被服务端设置拉到低分辨率；
  *  - MSE 播放器首选参数：12 Mbps / 30 fps / 1080×1920（见 MsePlayer）。
