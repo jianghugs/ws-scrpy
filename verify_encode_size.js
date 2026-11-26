@@ -14,7 +14,7 @@ const HOST = '127.0.0.1';
 const PORT = 8000;
 const MAX_BITRATE = 12582912;
 const MAX_FPS = 30;
-const MAX_BOUNDS_SIDE = 1920;
+const MAX_BOUNDS_SIDE = 1280; // 当前画质策略：长边 1280 上限，只缩不放
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -40,8 +40,7 @@ log('adb 物理分辨率', JSON.stringify(sizes));
 
 // ---- 解析 initial-info ----
 function parseInitial(buf) {
-    let off = 14; // 'scrdpy_initial' 魔术长度（含结尾 \0 则为 15，见下方修正）
-    // Util.stringToUtf8ByteArray('scrdpy_initial') 长度 14
+    let off = 14; // 'scrcpy_initial' 魔术长度（Util.stringToUtf8ByteArray('scrcpy_initial') === 14）
     off += 64; // device name 字段
     const displaysCount = buf.readInt32BE(off); off += 4;
     const displays = [];
@@ -149,38 +148,41 @@ ws.on('message', (data) => {
         return;
     }
     const buf = Buffer.from(data);
-    if (buf.length > 14 && buf.slice(0, 14).toString() === 'scrdpy_initial') {
+    if (buf.length > 14 && buf.slice(0, 14).toString() === 'scrcpy_initial') {
         displays = parseInitial(buf);
         log('initial-info:');
         displays.forEach((d) => {
             log(`  display ${d.displayId} 设备尺寸=${d.displaySize} 连接数=${d.connectionCount}`);
             log(`    screenInfo.videoSize=${d.screenInfo ? d.screenInfo.videoSize : '无'} 服务端videoSettings=${JSON.stringify(d.videoSettings)}`);
         });
-        // 推送画质策略
-        const d = displays[0];
-        const maxSide = Math.max(d.displaySize[0], d.displaySize[1]);
-        const side = Math.min(maxSide, MAX_BOUNDS_SIDE) & ~15;
-        log(`推送画质策略: bounds=${side}x${side} bitrate=${MAX_BITRATE} maxFps=${MAX_FPS} displayId=${d.displayId}`);
-        ws.send(buildSetVideoSettings({ bitrate: MAX_BITRATE, maxFps: MAX_FPS, iFrameInterval: 5, w: side, h: side, displayId: d.displayId }));
-        pushed = true;
-        return;
-    }
-    if (buf.length > 14 && buf.slice(0, 14).toString() === 'scrdpy_message') {
-        return; // 设备消息
-    }
-    // 视频 NAL
-    nalCount++;
-    const nalType = buf[0] & 0x1f;
-    if (nalType === 5) { idrCount++; if (pushed) idrAfterPush++; }
-    if (nalType === 7) {
-        const res = spsResolution(buf);
-        if (res) {
-            log(`SPS → 编码分辨率 ${res[0]}x${res[1]}${pushed ? '（推送后）' : '（推送前）'}`);
-            if (pushed) spsAfterPush.push(res);
+        // 推送画质策略（只推一次；服务端应用后会向所有连接广播新的 initial-info，
+        // 若每次都推会形成反馈环——真实浏览器端有 requestedVideoSettings 守卫）
+        if (!pushed) {
+            const d = displays[0];
+            const base = (d.screenInfo && d.screenInfo.videoSize) || d.displaySize;
+            const maxSide = Math.max(base[0], base[1]);
+            const side = Math.min(maxSide, MAX_BOUNDS_SIDE) & ~15;
+            log(`推送画质策略: bounds=${side}x${side} bitrate=${MAX_BITRATE} maxFps=${MAX_FPS} displayId=${d.displayId}`);
+            ws.send(buildSetVideoSettings({ bitrate: MAX_BITRATE, maxFps: MAX_FPS, iFrameInterval: 5, w: side, h: side, displayId: d.displayId }));
+            pushed = true;
+        }
+    } else if (buf.length > 14 && buf.slice(0, 14).toString() === 'scrcpy_message') {
+        // 设备消息，忽略
+    } else {
+        // 视频 NAL
+        nalCount++;
+        const nalType = buf[0] & 0x1f;
+        if (nalType === 5) { idrCount++; if (pushed) idrAfterPush++; }
+        if (nalType === 7) {
+            const res = spsResolution(buf);
+            if (res) {
+                log(`SPS → 编码分辨率 ${res[0]}x${res[1]}${pushed ? '（推送后）' : '（推送前）'}`);
+                if (pushed) spsAfterPush.push(res);
+            }
         }
     }
-    // 12 秒后收尾
-    if (Date.now() - startTime > 12000) {
+    // 15 秒后收尾
+    if (Date.now() - startTime > 15000) {
         log(`\n===== 结果 =====`);
         log(`NAL 总数 ${nalCount}，IDR ${idrCount}（推送后 ${idrAfterPush}）`);
         if (spsAfterPush.length) {
@@ -191,8 +193,9 @@ ws.on('message', (data) => {
             if (native) {
                 const maxNative = Math.max(native[0], native[1]);
                 const maxEnc = Math.max(last[0], last[1]);
-                const ok = maxEnc >= Math.min(maxNative, MAX_BOUNDS_SIDE) * 0.95;
-                log(ok ? 'PASS: 编码尺寸已吃满原生（或 1920 封顶值）' : `FAIL: 编码长边 ${maxEnc} 远小于原生长边 ${maxNative}`);
+                const expect = Math.min(maxNative, MAX_BOUNDS_SIDE) & ~15;
+                const ok = Math.abs(maxEnc - expect) <= 16;
+                log(ok ? `PASS: 编码长边 ${maxEnc} 符合 1280 上限策略（期望 ${expect}）` : `FAIL: 编码长边 ${maxEnc}，期望 ${expect}`);
                 finish(ok ? 0 : 1);
                 return;
             }
