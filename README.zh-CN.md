@@ -85,6 +85,7 @@ export WS_SCRCPY_API_KEY="<your-api-key>"
 http://<server>:8000/?key=<your-api-key>
 ```
 
+跨平台部署步骤（Linux / macOS / Windows / Docker）见 [DEPLOY.md](DEPLOY.md)。
 完整部署文档（systemd 单元、密钥轮换、URL 格式、嵌入式仪表盘协议、
 故障排查）见 [README-部署文档.md](README-部署文档.md)（中文）。
 

@@ -93,7 +93,8 @@ as a query parameter or in the `Authorization` header:
 http://<server>:8000/?key=<your-api-key>
 ```
 
-See [README-部署文档.md](README-部署文档.md) for the full deployment guide
+For cross-platform deployment steps (Linux / macOS / Windows / Docker), see
+[DEPLOY.md](DEPLOY.md). For the full deployment guide
 (systemd unit, key rotation, URL formats, embedded-dashboard protocol and
 troubleshooting). The document is written in Chinese.
 
